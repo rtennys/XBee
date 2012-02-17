@@ -1,30 +1,74 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Pipes;
 using System.IO.Ports;
 using System.Linq;
+using System.Security.AccessControl;
+using System.Threading;
 
 namespace xbee.SensorNetworkExample
 {
     internal class Program
     {
         private static readonly List<Thermometer> _thermometers = new List<Thermometer>();
+        private static XBeeReader _xbee;
 
         private static void Main()
         {
             using (var port = new SerialPort("COM3", 9600))
             {
-                var reader = new XBeeReader(port);
+                _xbee = new XBeeReader(port);
 
-                while (!Console.KeyAvailable)
+                CreatePipeListener();
+
+                while (true)
                 {
-                    var frame = reader.ReadFrame();
+                    if (Console.KeyAvailable)
+                    {
+                        var c = char.ToUpper(Console.ReadKey(true).KeyChar);
+                        if (c == 'X') break;
+                        if (c == ' ') TriggerGarageDoor(_xbee);
+                    }
+                    else if (_xbee.FrameAvailable)
+                    {
+                        var frame = _xbee.ReadFrame();
 
-                    if (frame.FrameType == XBeeFrameType.RXIOReceived)
-                        ProcessTemperatureReading(new XBeeIOFrame(frame));
-                    else
-                        Console.WriteLine(frame);
+                        if (frame.FrameType == XBeeFrameType.RXIOReceived)
+                            ProcessTemperatureReading(new XBeeIOFrame(frame));
+                        else
+                            Console.WriteLine(frame);
+                    }
+
+                    Thread.Sleep(500);
                 }
             }
+        }
+
+        private static void CreatePipeListener()
+        {
+            var pipe = new NamedPipeServerStream("XBEE SAMPLE", PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances, PipeTransmissionMode.Message, PipeOptions.Asynchronous);
+            //var security = pipe.GetAccessControl();
+            //security.AddAccessRule(new PipeAccessRule("rob-pc\\rob", PipeAccessRights.FullControl, AccessControlType.Allow));
+            //pipe.SetAccessControl(security);
+            pipe.BeginWaitForConnection(Pipe_Connected, pipe);
+        }
+
+        private static void Pipe_Connected(IAsyncResult ar)
+        {
+            var pipe = ar.AsyncState as NamedPipeServerStream;
+            pipe.EndWaitForConnection(ar);
+
+            CreatePipeListener();
+
+            using (var sr = new StreamReader(pipe))
+            {
+                var message = sr.ReadLine();
+                if (message == "Garage Door")
+                    TriggerGarageDoor(_xbee);
+            }
+
+            pipe.Close();
         }
 
         private static void ProcessTemperatureReading(XBeeIOFrame frame)
@@ -38,11 +82,24 @@ namespace xbee.SensorNetworkExample
 
             thermometer.AddSample(frame.Analog0Sample);
 
+            var top = Console.CursorTop;
+
             Console.CursorLeft = 0;
             Console.CursorTop = _thermometers.IndexOf(thermometer);
             Console.WriteLine(thermometer);
 
-            Console.CursorTop = _thermometers.Count;
+            Console.CursorTop = Math.Max(top, _thermometers.Count);
+        }
+
+        private static void TriggerGarageDoor(XBeeReader reader)
+        {
+            var atFrame = new XBeeATCommandFrame(0x0013A200408697CB, "D1", 5);
+            reader.WriteFrame(atFrame.GetFrame());
+
+            Thread.Sleep(100);
+
+            atFrame.Parameter = 0;
+            reader.WriteFrame(atFrame.GetFrame());
         }
 
         public class Thermometer

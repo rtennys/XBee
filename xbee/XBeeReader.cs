@@ -20,6 +20,20 @@ namespace xbee
 
         private readonly SerialPort _port;
 
+        public bool FrameAvailable
+        {
+            get { return _port.BytesToRead > 0; }
+        }
+
+        public void WriteFrame(XBeeFrame frame)
+        {
+            var data = frame.FrameData.ToArray();
+            _port.Write(new byte[] {_FRAME_START}, 0, 1);
+            _port.Write(new[] {(byte)((data.Length & 0xFF00) >> 8), (byte)(data.Length & 0xFF)}, 0, 2);
+            _port.Write(data, 0, data.Length);
+            _port.Write(new[] {CalculateChecksum(data)}, 0, 1);
+        }
+
         public XBeeFrame ReadFrame()
         {
             while (true)
@@ -53,6 +67,12 @@ namespace xbee
         {
             var sum = frameData.Sum(x => (int)x) + checksum;
             return (sum & 0xFF) == 0xFF;
+        }
+
+        private byte CalculateChecksum(byte[] frameData)
+        {
+            var sum = frameData.Sum(x => (int)x);
+            return (byte)(0xFF - sum);
         }
     }
 }
